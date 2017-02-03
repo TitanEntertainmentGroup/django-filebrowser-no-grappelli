@@ -1,18 +1,22 @@
 # coding: utf-8
 
+import json
 import os
 import re
 from time import gmtime, strftime, localtime, time
 
+
 from django import forms
+from django.contrib.admin.sites import site as admin_site
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.core.files.storage import DefaultStorage, default_storage, FileSystemStorage
 from django.core.paginator import Paginator, InvalidPage, EmptyPage
 from django.core.urlresolvers import reverse, get_urlconf, get_resolver
 from django.http import HttpResponseRedirect, HttpResponseBadRequest
-from django.shortcuts import render_to_response, HttpResponse
-from django.template import RequestContext as Context
+from django.shortcuts import render, HttpResponse
+
+from django.utils.encoding import smart_text
 from django.utils.translation import ugettext as _
 from django.views.decorators.cache import never_cache
 from django.views.decorators.clickjacking import xframe_options_sameorigin
@@ -28,8 +32,6 @@ from filebrowser.settings import (DIRECTORY, EXTENSIONS, SELECT_FORMATS, ADMIN_V
                                   CONVERT_FILENAME, SEARCH_TRAVERSE, EXCLUDE, VERSIONS, VERSIONS_BASEDIR, EXTENSION_LIST, DEFAULT_SORTING_BY, DEFAULT_SORTING_ORDER,
                                   LIST_PER_PAGE, OVERWRITE_EXISTING, DEFAULT_PERMISSIONS, UPLOAD_TEMPDIR)
 
-from .compat import admin_context, json, smart_text
-
 
 # Add some required methods to FileSystemStorage
 if FileSystemStorageMixin not in FileSystemStorage.__bases__:
@@ -38,6 +40,15 @@ if FileSystemStorageMixin not in FileSystemStorage.__bases__:
 
 # This cache contains all *instantiated* FileBrowser sites
 _sites_cache = {}
+
+
+def admin_context(context, request):
+    return dict(admin_site.each_context(request), **context)
+
+
+def admin_request(request, current_app):
+    request.current_app = getattr(request, 'current_app', current_app)
+    return request
 
 
 def get_site_dict(app_name='filebrowser'):
@@ -190,11 +201,9 @@ class FileBrowserSite(object):
     def get_urls(self):
         "URLs for a filebrowser.site"
         from django.conf.urls import url
-        from .compat import patterns
 
         # filebrowser urls (views)
-        urlpatterns = patterns(
-            '',
+        urlpatterns = [
             url(r'^browse/$', path_exists(self, filebrowser_view(self.browse)), name="fb_browse"),
             url(r'^createdir/', path_exists(self, filebrowser_view(self.createdir)), name="fb_createdir"),
             url(r'^upload/', path_exists(self, filebrowser_view(self.upload)), name="fb_upload"),
@@ -203,7 +212,7 @@ class FileBrowserSite(object):
             url(r'^detail/$', file_exists(self, path_exists(self, filebrowser_view(self.detail))), name="fb_detail"),
             url(r'^version/$', file_exists(self, path_exists(self, filebrowser_view(self.version))), name="fb_version"),
             url(r'^upload_file/$', staff_member_required(csrf_exempt(self._upload_file)), name="fb_do_upload"),
-        )
+        ]
         return urlpatterns
 
     def add_action(self, action, name=None):
@@ -326,18 +335,22 @@ class FileBrowserSite(object):
         except (EmptyPage, InvalidPage):
             page = p.page(p.num_pages)
 
-        return render_to_response('filebrowser/index.html', admin_context({
-            'p': p,
-            'page': page,
-            'filelisting': filelisting,
-            'query': query,
-            'title': _(u'FileBrowser'),
-            'is_popup': "pop" in request.GET,   # ChangeList uses "pop"
-            'settings_var': get_settings_var(directory=self.directory),
-            'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
-            'breadcrumbs_title': "",
-            'filebrowser_site': self
-        }, request), context_instance=Context(request, current_app=self.name))
+        return render(
+            admin_request(request, self.name),
+            'filebrowser/index.html',
+            admin_context({
+                'p': p,
+                'page': page,
+                'filelisting': filelisting,
+                'query': query,
+                'title': _(u'FileBrowser'),
+                'is_popup': "pop" in request.GET,   # ChangeList uses "pop"
+                'settings_var': get_settings_var(directory=self.directory),
+                'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
+                'breadcrumbs_title': "",
+                'filebrowser_site': self
+            }, request)
+        )
 
     def createdir(self, request):
         "Create Directory"
@@ -365,30 +378,38 @@ class FileBrowserSite(object):
         else:
             form = CreateDirForm(path, filebrowser_site=self)
 
-        return render_to_response('filebrowser/createdir.html', admin_context({
-            'form': form,
-            'query': query,
-            'title': _(u'New Folder'),
-            'is_popup': "pop" in request.GET,
-            'settings_var': get_settings_var(directory=self.directory),
-            'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
-            'breadcrumbs_title': _(u'New Folder'),
-            'filebrowser_site': self
-        }, request), context_instance=Context(request, current_app=self.name))
+        return render(
+            admin_request(request, self.name),
+            'filebrowser/createdir.html',
+            admin_context({
+                'form': form,
+                'query': query,
+                'title': _(u'New Folder'),
+                'is_popup': "pop" in request.GET,
+                'settings_var': get_settings_var(directory=self.directory),
+                'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
+                'breadcrumbs_title': _(u'New Folder'),
+                'filebrowser_site': self
+            }, request),
+        )
 
     def upload(self, request):
         "Multipe File Upload."
         query = request.GET
 
-        return render_to_response('filebrowser/upload.html', admin_context({
-            'query': query,
-            'title': _(u'Select files to upload'),
-            'is_popup': "pop" in request.GET,
-            'settings_var': get_settings_var(directory=self.directory),
-            'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
-            'breadcrumbs_title': _(u'Upload'),
-            'filebrowser_site': self
-        }, request), context_instance=Context(request, current_app=self.name))
+        return render(
+            admin_request(request, self.name),
+            'filebrowser/upload.html',
+            admin_context({
+                'query': query,
+                'title': _(u'Select files to upload'),
+                'is_popup': "pop" in request.GET,
+                'settings_var': get_settings_var(directory=self.directory),
+                'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
+                'breadcrumbs_title': _(u'Upload'),
+                'filebrowser_site': self
+            }, request)
+        )
 
     def delete_confirm(self, request):
         "Delete existing File/Directory."
@@ -411,18 +432,22 @@ class FileBrowserSite(object):
             filelisting = None
             additional_files = None
 
-        return render_to_response('filebrowser/delete_confirm.html', admin_context({
-            'fileobject': fileobject,
-            'filelisting': filelisting,
-            'additional_files': additional_files,
-            'query': query,
-            'title': _(u'Confirm delete'),
-            'is_popup': "pop" in request.GET,
-            'settings_var': get_settings_var(directory=self.directory),
-            'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
-            'breadcrumbs_title': _(u'Confirm delete'),
-            'filebrowser_site': self
-        }, request), context_instance=Context(request, current_app=self.name))
+        return render(
+            admin_request(request, self.name),
+            'filebrowser/delete_confirm.html',
+            admin_context({
+                'fileobject': fileobject,
+                'filelisting': filelisting,
+                'additional_files': additional_files,
+                'query': query,
+                'title': _(u'Confirm delete'),
+                'is_popup': "pop" in request.GET,
+                'settings_var': get_settings_var(directory=self.directory),
+                'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
+                'breadcrumbs_title': _(u'Confirm delete'),
+                'filebrowser_site': self
+            }, request)
+        )
 
     def delete(self, request):
         "Delete existing File/Directory."
@@ -486,17 +511,21 @@ class FileBrowserSite(object):
         else:
             form = ChangeForm(initial={"name": fileobject.filename}, path=path, fileobject=fileobject, filebrowser_site=self)
 
-        return render_to_response('filebrowser/detail.html', admin_context({
-            'form': form,
-            'fileobject': fileobject,
-            'query': query,
-            'title': u'%s' % fileobject.filename,
-            'is_popup': "pop" in request.GET,
-            'settings_var': get_settings_var(directory=self.directory),
-            'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
-            'breadcrumbs_title': u'%s' % fileobject.filename,
-            'filebrowser_site': self
-        }, request), context_instance=Context(request, current_app=self.name))
+        return render(
+            admin_request(request, self.name),
+            'filebrowser/detail.html',
+            admin_context({
+                'form': form,
+                'fileobject': fileobject,
+                'query': query,
+                'title': u'%s' % fileobject.filename,
+                'is_popup': "pop" in request.GET,
+                'settings_var': get_settings_var(directory=self.directory),
+                'breadcrumbs': get_breadcrumbs(query, query.get('dir', '')),
+                'breadcrumbs_title': u'%s' % fileobject.filename,
+                'filebrowser_site': self
+            }, request),
+        )
 
     def version(self, request):
         """
@@ -507,12 +536,16 @@ class FileBrowserSite(object):
         path = u'%s' % os.path.join(self.directory, query.get('dir', ''))
         fileobject = FileObject(os.path.join(path, query.get('filename', '')), site=self)
 
-        return render_to_response('filebrowser/version.html', admin_context({
-            'fileobject': fileobject,
-            'query': query,
-            'settings_var': get_settings_var(directory=self.directory),
-            'filebrowser_site': self
-        }, request), context_instance=Context(request, current_app=self.name))
+        return render(
+            admin_request(request, self.name),
+            'filebrowser/version.html',
+            admin_context({
+                'fileobject': fileobject,
+                'query': query,
+                'settings_var': get_settings_var(directory=self.directory),
+                'filebrowser_site': self
+            }, request)
+        )
 
     def _upload_file(self, request):
         """
@@ -587,6 +620,7 @@ class FileBrowserSite(object):
                 'url': f.url,
             }
             return HttpResponse(json.dumps(ret_json), content_type="application/json")
+
 
 storage = DefaultStorage()
 # Default FileBrowser site
